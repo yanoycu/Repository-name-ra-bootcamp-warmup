@@ -1,0 +1,329 @@
+---
+title: "Answer_DataCleaning"
+author: "Igarashi Kosuke"
+date: today
+execute:
+  warning: false
+  error: false
+format: 
+  html:
+    code-fold: true
+    embed-resources: true
+---
+
+```{r packages}
+#| echo: false
+if (!require("pacman")) install.packages("pacman")
+
+pacman::p_load(
+  tictoc,
+  dplyr,
+  tidyr,
+  ggplot2,
+  kableExtra,
+  here,
+  gt,
+  gtExtras,
+  openxlsx
+)
+
+conflicted::conflict_prefer_all("dplyr", quiet = TRUE)
+```
+
+## (a) Semester Dataの整形
+
+### 1. 生データを読み込みなさい (semester_dummy_1.csv, semester_dummy_2.csv)
+### 2. semester_dummy_1.csvについては、1行目に格納されているデータを列名としなさい
+### 3. 2つのデータを適切に結合しなさい
+### 4. ’Y’列を削除しなさい
+```{r semester_format_function}
+read_semester_dummy <- function() {
+  # データが格納されているディレクトリのパスを指定
+  list_filepath <- list.files(path = "01_data/raw/semester_dummy/")
+
+  # 空のデータフレームの作成
+  df_output <- tidyr::tibble()
+
+  # semester_dummy内には2つのファイルがあるため、連続で処理
+  for (file_path in list_filepath) {
+    # 生データの読み込み
+    # paste0関数でディレクトリとfile_pathを結合
+    df_raw <- readr::read_csv(paste0("01_data/raw/semester_dummy/", file_path)) |>
+      # across関数ですべての列をchr型に変換
+      mutate(across(everything(), as.character))
+
+    # 空のデータフレームdf_outputにデータフレーム1, 2を縦方向に結合
+    df_output <- df_output |>
+      bind_rows(df_raw)
+  }
+
+  # データフレーム1については、1行目を列名とする
+  # list_colnamesに1行目の変数名を代入
+  list_colnames <- df_output |>
+    slice_head(n = 1)
+
+  colnames(df_output) <- list_colnames
+
+  df_output <- df_output |>
+    # 1行目（列名）は不要であるため、2行目以降を抽出
+    slice(2:n()) |>
+    # year列をnum型にする
+    mutate(
+      year = as.numeric(year)
+    ) |>
+    # Y列を削除
+    select(-Y)
+
+  # 出力を忘れない
+  return(df_output)
+}
+```
+
+```{r semester_format}
+# read_semester_dummy関数の呼び出し（引数なし）
+df_semester_dummy_raw <- read_semester_dummy()
+```
+
+### 5. semester制が導入された年の列を作成しなさい。
+
+### 6. 5.を用いてsemester制導入後を示すダミー変数を作成しなさい
+###    - 2001年にsemester制が導入された場合、1991~2000年は0, 2001年以降は1となる変数
+
+```{r semester_format2}
+# 引数にデータフレームをとる関数を作成
+add_semester_vars <- function(df) {
+  # semester制導入の年の列を作成
+  # 各大学について、semester列が1の行のうち一番上の年をsemester制導入の年とする
+  df_first_year <- df |>
+    # distinct関数で重複した行を削除
+    # keep_allオプションによって、指定した列以外の列も保持できる
+    dplyr::distinct(unitid, semester, quarter, .keep_all = TRUE) |>
+    # filter関数でsemester列の値が1（semester制導入後）の行のみ残す
+    dplyr::filter(
+      dplyr:::n() > 1,
+      semester == 1,
+      .by = unitid
+    ) |>
+    # distinct関数で各大学について一番上の行のみ取り出す
+    # すでにsemester制導入後だけ残しているため、一番上の行が導入年となる
+    dplyr::distinct(unitid, year) |>
+    dplyr::rename(
+      yearofsem = year
+    )
+
+
+  df_output <- df |>
+    # unitidをキーとして、元のデータフレームにyearofsem列を追加
+    left_join(df_first_year, by = "unitid") |>
+    # semester制導入後に1をとるダミー変数afterを作成
+    dplyr::mutate(
+      after = dplyr::if_else(year >= yearofsem, 1, 0)
+    )
+  # 出力を忘れない
+  return(df_output)
+}
+```
+
+```{r semester_save}
+# 事前に結合したdf_semester_dummy_rowをadd_semester_vars関数で処理
+df_semester_dummy <- add_semester_vars(df_semester_dummy_raw)
+
+# 保存
+# write.csv(df_semester_dummy, "01_data/intermediate/clean_semester_dummy.csv")
+```
+
+## (b) Gradrate Dataの整形
+
+### 生データを読み込み、全て縦に結合しなさい
+
+##### map version
+```{r outcome_read_map}
+# 個別のファイルを引数にとることに注意
+read_outcome_data <- function(file_i) {
+  # csvファイルではなくxlsxファイルであることに注意
+  df_raw <- openxlsx::read.xlsx(paste0("01_data/raw/outcome/", file_i))
+
+  df_output <- df_raw |>
+    # 各列のデータ型をchr型にする
+    mutate(across(everything(), as.character))
+
+  return(df_output)
+}
+```
+
+##### for version
+```{r outcome_read_for}
+# outcomeデータのリストを引数に取ることに注意
+read_outcome_data_for <- function(list_filepath_outcome) {
+  # 空のデータフレームの作成
+  df_based <- tidyr::tibble()
+
+  # 1991~2016年のデータを繰り返し処理
+  for (file_i in list_filepath_outcome) {
+    df_raw <- openxlsx::read.xlsx(paste0("01_data/raw/outcome/", file_i)) |>
+      mutate(across(everything(), as.character))
+
+    df_based <- df_based |>
+      dplyr::bind_rows(df_raw)
+  }
+
+  return(df_based)
+}
+```
+
+```{r outcome_clean}
+# (b) Graduation Data
+list_filepath_outcome <- list.files("01_data/raw/outcome/")
+
+# 'purrr::map' version
+# map関数でlist_filepath_outcomeのデータそれぞれにread_outcome_data関数を適用
+df_outcome_raw <- purrr::map(list_filepath_outcome, read_outcome_data) |>
+  # それぞれの年のデータを縦方向に結合し、1つのデータフレームとする
+  dplyr::bind_rows()
+# 'for' version
+df_outcome_raw <- read_outcome_data_for(list_filepath_outcome)
+```
+
+
+### 女子学生の4年卒業率に0.01をかけて、0から1のスケールに変更しなさい
+### 男女合計の4年卒業率と男子学生の4年卒業率を計算し、新たな列として追加しなさい
+### 計算した卒業率を有効数字3桁に調整しなさい
+### データを1991年から2010年に限定しなさい
+
+```{r outcome_clean2}
+clean_outcome <- function(df_input) {
+  df_output <- df_input |>
+    mutate(
+      # unitid列以外の列のデータ型をnum型とする
+      across(-unitid, as.numeric),
+      # 女子学生の4年卒業率に0.01をかける
+      womengradrate4yr = women_gradrate_4yr * 0.01,
+      # 男女合計の4年卒業率と男子学生の4年卒業率を計算(有効数字3桁)
+      gradrate4yr = round(tot4yrgrads / totcohortsize, digits = 3),
+      mengradrate4yr = round(m_4yrgrads / m_cohortsize, digits = 3)
+    ) |>
+    # 1991年から2010年までのデータフレームに変形
+    filter(between(year, 1991, 2010))
+
+  return(df_output)
+}
+```
+
+```{r outcome_save}
+df_outcome <- clean_outcome(df_outcome_raw)
+
+# 保存
+# write.csv(df_outcome, "01_data/intermediate/clean_outcome.csv")
+```
+
+## (c) Covariate Data
+### 生データを読み込みなさい (covariates.xlsx)
+### ’university_id’という列名を’unitid’に変更しなさい。
+### ’unitid’の最後についている”aaaa”を削除しなさい。
+### 'category'列に含まれる'instatetuition', 'costs', 'faculty'を別の列として追加しなさい。
+```{r covariates_read}
+read_covariates_data <- function() {
+  # 生データの読み込み
+  df_raw <- openxlsx::read.xlsx("01_data/raw/covariates/covariates.xlsx")
+
+  df_output <- df_raw |>
+    # 列名をuniversity_idからunitidに変更
+    rename(unitid = university_id) |>
+    # ’unitid’の値のうち、最後についている”aaaa”を削除
+    # 'aaaa'を''(空文字)に変えることで文字列の削除となる
+    mutate(
+      unitid = stringr::str_replace_all(unitid, pattern = "aaaa", replacement = ""),
+    ) |>
+    # データをwide型にする
+    tidyr::pivot_wider(
+      names_from = "category",
+      values_from = "value"
+    )
+
+
+  return(df_output)
+}
+```
+
+```{r covariates_format}
+# read_covariates_data関数を適用し、covariatesデータを整形
+df_covariates_raw <- read_covariates_data()
+```
+
+
+### outcomeやsemester_dummyに含まれる年を調べ、covariatesデータの期間を他のデータに揃えなさい
+### outcome_dataに含まれるunitidを特定し、covariatesに含まれるunitidをoutcomeデータに揃えなさい
+
+```{r covariates_format2}
+# df_covariates_rowとdf_outcomeを引数に取る関数を定義
+# outcomeの代わりにsemester_dummyをとっても良い
+clean_covariates <- function(df_covariates_raw, df_outcome) {
+  # df_outcomeに含まれるunitidのユニーク値のリストを取得
+  list_unitid_outcome <- df_outcome |>
+    dplyr::distinct(unitid) |>
+    dplyr::pull()
+
+  # "another solution"
+  # list_unitid_outcome <- unique(df_outcome_ready$unitid)
+
+  df_output <- df_covariates_raw |>
+    mutate(
+      # unitid以外の列の値をnum型に変換
+      across(-unitid, as.numeric)
+    ) |>
+    # 他のデータセットが以下の期間なので、共変量データも合わせる。
+    filter(
+      # df_outcomeに含まれるunitidに範囲を絞り、
+      unitid %in% list_unitid_outcome,
+      # 1991~2010年に範囲を限定
+      between(year, 1991, 2010),
+      # 1994年のデータは含まれないことに注意
+      year != 1994
+    )
+
+
+  return(df_output)
+}
+```
+
+```{r covariates_save}
+# 完成版のデータフレームを保存
+df_covariates <- clean_covariates(df_covariates_raw, df_outcome)
+
+# 保存
+# write.csv(df_covariates, "01_data/intermediate/clean_covariates.csv")
+```
+
+## (d) Create Master
+### 結合に用いる変数を考え、semester dummy data, covariates data, gradrate dataを適切に結合しなさい
+### 白人学生が学生全体に占める割合を計算しなさい
+```{r merge}
+merge_dfs <- function(df_sememter_dummy, df_outcome, df_covariates) {
+  # 3つ以上のデータフレームを結合するため、join_all関数を使用
+  df_master <- plyr::join_all(
+    dfs = list(df_sememter_dummy, df_outcome, df_covariates),
+    # 共通する変数unitid, yearを結合のためのキー変数に用いる
+    by = c("unitid", "year"),
+    type = "left"
+  )
+
+  df_master <- df_master |>
+    mutate(
+      # per_white_cohort = round(white_cohortsize / totcohortsize, digits = 3),
+      # 白人学生が学生全体に占める割合の列を追加
+      per_white_cohort = white_cohortsize / totcohortsize,
+      # per_women_cohort = round(w_cohortsize / totcohortsize, digits = 3)
+      # # 白人女性学生が学生全体に占める割合の列を追加
+      per_women_cohort = w_cohortsize / totcohortsize
+    )
+
+  return(df_master)
+}
+```
+
+```{r master_save}
+df_master <- merge_dfs(df_semester_dummy, df_outcome, df_covariates)
+
+# 保存
+# write.csv(df_master, "01_data/intermediate/master.csv")
+```
